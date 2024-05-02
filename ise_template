@@ -1,0 +1,332 @@
+# How to use this script:
+# Step 1: Export dataset from here: https://lrback.firabarcelona.com/leads
+# Step 2: Save the export in the "Raw" folder in directory
+# Step 3: Rename the file to YYYY_Show_Day#_RAW.xlsx (e.g. 2023_ISE_RAW.xlsx)
+# Step 4: Update the name of the file in the chunk "Import Dataset"
+# Step 5: Change the export name at the end of the script (same name without suffix "_RAW")
+# Step 6: Update the chunk "Staffing of the Day" if needed
+# Step 7: Insert the timestamp of the last imported scan (from the day before) in the chunk "Truncuate list from last update"
+# Step 8: Run the Script
+# Step 9: Import both csv files into Hubspot
+
+
+# Import packages
+import pandas as pd
+import numpy as np
+from datetime import date
+
+
+# Import Dataset
+df = pd.read_excel("C:\\Python\\ISE_Datasets\\Raw\\2024_ISE_Day4_Raw.xlsx") # Step 4: UPDATE HERE
+
+
+#--------------------------------------------------------PREPROCESSING--------------------------------------------------------
+
+# Convert Visit Date string into datetime format
+df["Visit date"] = pd.to_datetime(df['Visit date'])
+df["ISE 2024 Visit Day"] = df["Visit date"].dt.date
+
+
+# Truncuate list from last update
+last_import = pd.to_datetime('2023-02-01 23:59:59') # Step 7: UPDATE HERE
+
+df = df.loc[(df["Visit date"] > last_import)]
+
+
+# Set new index
+df = df.set_index(np.arange(0,len(df)))
+
+
+# Delete all HOLOPLOT staff
+y = 0
+del_list = []
+for i in df["Email"]:
+    string = str(df["Email"][y]).split("@")
+    if "holoplot.com" in string:
+        del_list.append(y)
+    y += 1
+del_list = sorted(del_list,reverse=True)
+df = df.drop(index = del_list)
+
+
+# Set new index
+df = df.set_index(np.arange(0,len(df)))
+
+
+# Staffing of the day
+df['Scanner name'] = df['Scanner name'].replace("François Villaret", "Francois Villaret")
+staff_demo = ("Natalia Szczepanczyk", "ANGAD", "Giulia Nicosia", "Ewa Cabaj") # Step 6: UPDATE HERE
+sales_staff = ("Ryan Penny", "Francois Villaret", "Alessandro Rinaldi", "Ian Holden", "Reese Kirsh", "Natalia Szczepanczyk", "François Villaret")
+
+
+# Create df2 for Deals
+df2 = df[[ "Email", "Scanner name", "[Project Survey] Project Name","[Project Survey] Product Application - Speech", 
+          "[Project Survey] Product Application - Live", "[Project Survey] Product Application - Experience",
+          "[Project Survey] Project Timeline - 6 months", "[Project Survey] Project Timeline - 6-12 months", 
+          "[Project Survey] Project Timeline - 12-24 months", "[Project Survey] Project Timeline - 24+ months", 
+          "[Project Survey] Project Size - S", "[Project Survey] Project Size - M", "[Project Survey] Project Size - L", 
+          "[Project Survey] Project Size - XL", "[Project Survey] Project Budget - Confirmed / secured by client", 
+          "[Project Survey] Project Budget - Not confirmed / secured by client", "[Project Survey] Project Budget - Unsure", 
+          "[Project Survey] Additional Note"]]
+
+
+# ---------------------------------------------------CONTACTS-----------------------------------------------------------------
+
+## Demo Tag
+def demo(scanner_name):
+    if scanner_name in staff_demo:
+        return "Demo"
+    else:
+        return "Booth"
+    
+## Contact Owner
+def contact_owner(scanner_name):
+    if scanner_name in sales_staff:
+        return scanner_name
+    else:
+        return ""
+    
+## Demo date
+def demo_date(visit_day,demo):
+    if demo == "Demo":
+        return visit_day
+    else:
+        return ""
+    
+## Lifecycle Stage
+#sql_tag = ("X1 Opportunity", "X2 Opportuinty", "Distribution")
+x1_buy_comp_act = ("Entertainment (includes cinemas, theatres, museums, theme parks)", 
+                   "Sports/ Venues (includes arenas, convention centres)" )
+x2_buy_comp_act = ("Education", "Retail", "Transportation (land, sea, air)", 
+                   "Hospitality (hotels, restaurants, bars, casinos, cruise ships)", 
+                   "Government/ Military", "Religious Organisation")
+rec_comp_act = ("AV Integration/ Installation", "Distribution/Reselling",
+                "Rental/ Staging/ Live Events/ Meeting Planning")
+decision_maker = ("CEO Chief Executive Officer", "CFO Chief Financial Officer", "CMO Chief Marketing Officer",
+                  "COO Chief Operating Officer", "CTO/CIO", "Director", "President", "Specialist", "Vice President")
+
+def lifecycle_qual(survey, tag, rating, comp_act, seniority, job_function, area_resp):
+    # sql
+    if pd.notnull(survey) == True:
+        return "Qualified Revenue Bringer"
+    elif tag in ("X1 Opportunity", "X2 Opportunity", "X1 Opportunity, X2 Opportunity", "X1 Opportunity*", "X2 Opportunity*"):
+        return "Qualified Revenue Bringer"
+    elif rating == "HOT":
+        return "Qualified Revenue Bringer"
+    elif tag in ("Distribution", "integrator", "*Distribution", "*integrator", "Distribution*", "integrator*", "Distribution, integrator"):
+        return "Qualified Distributor"
+    # mql
+    elif comp_act in x1_buy_comp_act and seniority in decision_maker:
+        return "Potential X1 End-Customer"
+    elif comp_act in x2_buy_comp_act and seniority in decision_maker:
+        return "Potential X2 End-Customer"
+    elif comp_act in rec_comp_act and seniority in decision_maker and (job_function in ("Audio (mixing, engineering)", "System design") or area_resp == "AV"):
+        return "Potential Distributor / Integrator / Consultant"
+    # lead
+    else:
+        return ""
+
+def lifecycle_stage (qual):
+    if qual in ("Qualified Revenue Bringer", "Qualified Distributor"):
+        return "SQL"
+    elif qual in ("Potential X1 End-Customer", "Potential X2 End-Customer", "Potential Distributor / Integrator / Consultant"):
+        return "MQL"
+    else:
+        return "Lead"
+
+    
+# Add columns
+df["ISE 2024 Demo vs Booth"] = [demo(scanner_name) for scanner_name in df["Scanner name"]]
+
+df["Contact Owner"] = [contact_owner(scanner_name) for scanner_name in df["Scanner name"]]
+
+df["ISE 2024 Demo Date"] = df.apply(lambda x: demo_date(x["ISE 2024 Visit Day"], x["ISE 2024 Demo vs Booth"]), axis=1)
+
+df["Trade Show Name"] = "2024 ISE"
+
+df['Sales Stream'] = "Inbound"
+
+df['Sales Channels'] = "Tradeshows"
+
+df['Sales Channels Drill-down'] = "2024 ISE"
+
+df['ISE 2024 Lifecycle Qualification Persona'] = df.apply(lambda x: lifecycle_qual(x["[Project Survey] Project Name"], 
+                                                                                   x["Tags"], x["Rating"], 
+                                                                                   x["Company activity"], x["Job title"], 
+                                                                                   x["Job function"], x["Area of responsibility"]), axis=1)
+
+df['ISE 2024 Lifecycle Stage'] = [lifecycle_stage(qual) for qual in df['ISE 2024 Lifecycle Qualification Persona']]
+
+
+# Set new index
+df = df.set_index(np.arange(0,len(df)))
+
+
+# Repair Comments-Column
+z = 0
+for i in df["Comments"]:
+    if isinstance(df["Comments"][z], float) == False:
+        df["Comments"][z] = str(df["Comments"][z]).strip('\n')
+    z += 1
+    
+
+# Set new index
+df = df.set_index(np.arange(0,len(df)))
+        
+
+# Rename columns
+df = df.rename(columns = {"Scanner name":"ISE 2024 Scanner Name","Job title": "ISE 2024 Seniority", "Company":"Company Name",
+                          "Company activity":"ISE 2024 Company activity", 
+                          "Area of responsibility":"ISE 2024 Area of responsibility", "Job function": "ISE 2024 Job function",
+                          "Comments":"ISE 2024 Note", "Rating":"ISE 2024 Rating", "GDPR Check 1 - Yes":"ISE 2024 MKT Opt-in", 
+                          "Tags": "ISE 2024 Tags", "Country": "Country/Region"})
+
+    
+# Delete unnecessary columns
+df_col_del = ("Id","Scanner device identifier","Visit date","Meeting name","Scan type","Pass Type",
+              "Title","Company size","Postal code","Address","Admin private comments","Images",
+              "GDPR check 2 - No", "[Project Survey] Project Name","[Project Survey] Product Application - Speech",
+              "[Project Survey] Product Application - Live", "[Project Survey] Product Application - Experience", 
+              "[Project Survey] Project Timeline - 6 months", "[Project Survey] Project Timeline - 6-12 months",
+              "[Project Survey] Project Timeline - 12-24 months", "[Project Survey] Project Timeline - 24+ months",
+              "[Project Survey] Project Size - S", "[Project Survey] Project Size - M", "[Project Survey] Project Size - L",
+              "[Project Survey] Project Size - XL", "[Project Survey] Project Budget - Confirmed / secured by client",
+              "[Project Survey] Project Budget - Not confirmed / secured by client", "[Project Survey] Project Budget - Unsure",
+              "[Project Survey] Additional Note", "ISE 2024 Demo vs Booth")
+for item in df_col_del:
+    df.pop(item)
+    
+    
+# -------------------------------------------------------DEALS----------------------------------------------------------------    
+
+# Drop rows with no Opportunities
+df2 = df2.dropna(subset=['[Project Survey] Project Name'])
+
+
+# Set new index
+df2 = df2.set_index(np.arange(0,len(df2)))
+
+
+# Prepare functions
+
+## Product Application
+def prod_app (speech, live, experience):
+    if speech == "X":
+        return "Speech"
+    elif live == "X":
+        return "Live"
+    elif experience == "X":
+        return "Experience"
+    else:
+        return ""
+
+
+## Project Timeline    
+def timeline (six_m, twelve_m, twentyfour_m, twentyfour_plus):
+    if six_m == "X":
+        return date(year=2024, month=7, day=31)
+    elif twelve_m == "X":
+        return date(year=2024, month=12, day=31)
+    elif twentyfour_m == "X":
+        return date(year=2025, month=12, day=31)
+    elif twentyfour_plus == "X":
+        return date(year=2026, month=12, day=31)
+    else:
+        return ""
+    
+
+
+## Project Size    
+def size (small, medium, large, xlarge):
+    if small == "X":
+        return "S"
+    elif medium == "X":
+        return "M"
+    elif large == "X":
+        return "L"
+    elif xlarge == "X":
+        return "XL"
+    else:
+        return ""
+
+
+
+## Project Budget
+def budget (secured, not_secured, unsure):
+    if secured == "X":
+        return "Confirmed / secured by client"
+    elif not_secured == "X":
+        return "Not confirmed / secured by clien"
+    elif unsure == "X":
+        return "Unsure"
+    else:
+        return ""
+
+
+## Contact Owner    
+def contact_owner (scanner_name):
+    if scanner_name in sales_staff:
+        return scanner_name
+    else:
+        return "Alessandro Rinaldi"
+
+    
+# Create Columns
+df2["Product Application"] = df2.apply(lambda x: prod_app(x["[Project Survey] Product Application - Speech"],
+                                                          x["[Project Survey] Product Application - Live"], 
+                                                           x["[Project Survey] Product Application - Experience"]), axis=1)
+
+df2["Close Date"] = df2.apply(lambda x: timeline(x["[Project Survey] Project Timeline - 6 months"],
+                                                          x["[Project Survey] Project Timeline - 6-12 months"], 
+                                                           x["[Project Survey] Project Timeline - 12-24 months"],
+                                                            x["[Project Survey] Project Timeline - 24+ months"]), axis=1)
+
+df2["Estimated Project Size"] = df2.apply(lambda x: size(x["[Project Survey] Project Size - S"],
+                                                          x["[Project Survey] Project Size - M"], 
+                                                           x["[Project Survey] Project Size - L"],
+                                                            x["[Project Survey] Project Size - XL"]), axis=1)
+
+df2["Project Budget Confirmation"] = df2.apply(lambda x: budget(x["[Project Survey] Project Budget - Confirmed / secured by client"],
+                                                          x["[Project Survey] Project Budget - Not confirmed / secured by client"], 
+                                                           x["[Project Survey] Project Budget - Unsure"]), axis=1)
+
+df2["Deal Owner"] = [contact_owner(scanner_name) for scanner_name in df2["Scanner name"]]
+
+df2['[Project Survey] Additional Note'] = df2.apply(lambda row: f"{row['[Project Survey] Additional Note']} (scanned on ISE 24 by {row['Scanner name']})", axis=1)      
+
+df2['Pipeline'] = "Sales Pipeline"
+
+df2['Deal stage'] = "Opportunity"
+
+df2['Sales Stream'] = "Inbound"
+
+df2['Sales Channel'] = "Tradeshows"
+
+df2['Sales Channel Trade Show Drilldown'] = "2024 ISE"
+
+
+# Rename Columns
+df2 = df2.rename(columns = {"Email": "Associated Contact", "[Project Survey] Project Name":"Deal Name",
+                            "[Project Survey] Additional Note": "Deal Description"})
+
+
+# Delete unnecessary columns
+df2_col_del = ("[Project Survey] Product Application - Speech", 
+          "[Project Survey] Product Application - Live", "[Project Survey] Product Application - Experience",
+          "[Project Survey] Project Timeline - 6 months", "[Project Survey] Project Timeline - 6-12 months", 
+          "[Project Survey] Project Timeline - 12-24 months", "[Project Survey] Project Timeline - 24+ months", 
+          "[Project Survey] Project Size - S", "[Project Survey] Project Size - M", "[Project Survey] Project Size - L", 
+          "[Project Survey] Project Size - XL", "[Project Survey] Project Budget - Confirmed / secured by client", 
+          "[Project Survey] Project Budget - Not confirmed / secured by client", "[Project Survey] Project Budget - Unsure",
+            "Scanner name" )
+
+for item in df2_col_del:
+    df2.pop(item)
+    
+
+#-------------------------------------------------------SAVING CSV-----------------------------------------------------------    
+
+
+#Export as .csv
+df2.to_csv('2024_ISE_IMPORT_Deals_Day4.csv') # Step 5: UPDATE HERE
+df.to_csv('2024_ISE_IMPORT_Contacts_Day4.csv') # Step 5: UPDATE HERE
